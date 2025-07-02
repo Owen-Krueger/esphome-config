@@ -1,0 +1,164 @@
+esphome:
+  name: ${device_name}
+  comment: ${device_description}
+  platform: ESP32
+  board: esp32dev
+
+external_components:
+  - source: ../components/irrigation
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: ${ip_address}
+  fast_connect: true # Needed to access hidden networks
+
+logger:
+
+api:
+  encryption:
+    key: !secret esp_api_key
+
+ota:
+  password: !secret esp_ota_password
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} IP Address"
+      disabled_by_default: true
+
+time:
+  - platform: sntp
+    id: ${device_id}_time
+
+globals:
+  - id: ${device_id}_remaining_time
+    type: int
+    restore_value: no
+    initial_value: "300"
+
+sensor:
+  - platform: uptime
+      name: "${friendly_name} Uptime"
+      disabled_by_default: true
+  
+  - platform: wifi_signal
+      name: "${friendly_name} WiFi Signal"
+      update_interval: 60s
+
+  # Retrieve durations settings from the Home Assistant UI.
+  - platform: homeassistant
+    id: ${device_id}_duration
+    entity_id: input_number.${device_id}_duration
+    on_value:
+      then:
+        - sensor.template.publish:
+            id: ${device_id}_duration
+            state: !lambda return id(${device_id}_duration).state;
+
+    # Store durations.
+  - platform: template
+    name: ${friendly_name} Duration
+    id: ${device_id}_duration
+
+  - platform: template
+    name: ${friendly_name} Remaining
+    id: ${device_id}_remaining
+    lamdba: "return 0;"
+    accuracy_decimals: 0
+    unit_of_measurement: minutes
+    icon: mdi:timer
+    on_value: # Turn off switch when remaining time is 0 (we're done watering).
+      then:
+        - if:
+          condition:
+            lamdba: return id(${device_id}_remaining_time) == 0;
+          then:
+            - switch.turn_off: ${device_id}_switch
+
+text_sensor:
+  # Retrieve list of times from the Home Assistant UI.
+  - platform: homeassistant
+    id: ui_${device_id}_times
+    entity_id: input_text.${device_id}_times
+    on_value:
+      then:
+        - text_sensor.template.publish:
+            id: ${device_id}_times
+            state: !lambda return id(ui_${device_id}_times).state;
+
+  # Store time lists.
+  - platform: template
+    name: Irrigation Zone1 Times
+    id: ${device_id}_times
+    on_value:
+      then:
+        # Update the next scheduled run time.
+        - text_sensor.template.publish:
+            id: ${device_id}_next
+            state: !lambda |-
+              return update_next_runtime(id(${device_id}_times).state);
+
+switch:
+  - platform: gpio
+    id: ${device_id}_switch
+    name: ${friendly_name} Switch
+    disabled_by_default: true
+    pin:
+      number: 4
+      inverted: false
+    on_turn_on:
+      then:
+        # Start the countdown timer.
+        - globals.set:
+          id: ${device_id}_remaining_time
+          value: !lamdba return id(${device_id}_duration).state * 60;
+
+        # Show remaining time.
+        - sensor.template.publish:
+          id: ${device_id}_next
+          state: !lamda return id(${device_id}_duration).state;
+
+        # Show the "Next Time" as "now".
+        - text_sensor.template.publish:
+            id: ${device_id}_next
+            state: "now"
+    on_turn_off:
+      then:
+        - sensor.template.publish:
+          id: ${device_id}_remaining
+          state: "0"
+
+        # Update the next scheduled run time.
+        - text_sensor.template.publish:
+          id: ${device_id}_next
+          state: !lambda |-
+              return update_next_runtime(id(${device_id}_times).state);
+
+# Update the countdown timers every 5 seconds.
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(${device_id}_remaining_time) > 0) {
+            // Store the previous time.
+            id(${device_id}_remaining_time_previous) = id(${device_id}_remaining_time);
+
+            // When the relay is on.
+            if (id(relay1).state) {
+              // Decrement the timer.
+              id(${device_id}_remaining_time) -= 5;
+
+              // Turn off the relay when the time reaches zero.
+              if (id(${device_id}_remaining_time) <= 0) {
+                id(relay1).turn_off();
+                id(${device_id}_remaining_time) = 0;
+              }
+            }
+
+            // Update the remaining time display.
+            if (id(${device_id}_remaining_time_previous) != id(${device_id}_remaining_time)) {
+              id(${device_id}_remaining).publish_state( (id(${device_id}_remaining_time)/60) + 1 );
+            }
+          }

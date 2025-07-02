@@ -1,0 +1,8 @@
+substitutions:
+    device_name: backyard-sprinkler
+    device_description: Sprinkler system for the backyard
+    friendly_name: Backyard Sprinkler
+    ip_address: !secret backyard_sprinkler_ip
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+<<: !include common/single_zone_sprinkler_common.yaml
